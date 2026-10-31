@@ -1,0 +1,850 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jungle Treasure Runner 3D</title>
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#70c8e8;font-family:Arial}
+canvas{display:block}
+
+#hud{
+ position:fixed;top:12px;left:12px;right:12px;
+ display:flex;justify-content:space-between;
+ gap:7px;pointer-events:none
+}
+.panel{
+ background:#152b25eF;color:white;
+ border:2px solid #f6c83f;border-radius:13px;
+ padding:11px 13px;font-weight:bold;
+ font-size:clamp(12px,2vw,18px)
+}
+#pause{
+ position:fixed;top:78px;left:14px;
+ width:53px;height:53px;border:2px solid white;
+ border-radius:13px;background:#1685e1;
+ color:white;font-size:25px
+}
+#controls{
+ position:fixed;bottom:20px;left:0;right:0;
+ display:flex;justify-content:space-around;
+ align-items:center;pointer-events:none
+}
+#controls button{
+ pointer-events:auto;width:65px;height:65px;
+ border:3px solid white;border-radius:50%;
+ background:#153f4caa;color:white;font-size:27px
+}
+#message{
+ position:fixed;inset:0;background:#061b1acb;
+ display:flex;align-items:center;justify-content:center;
+ color:white;text-align:center
+}
+#box{
+ background:#17452f;border:3px solid #f4c542;
+ border-radius:20px;padding:25px;max-width:350px;
+ margin:15px
+}
+#box button{
+ background:#f4c542;border:0;border-radius:12px;
+ padding:13px 28px;font-size:18px;font-weight:bold
+}
+</style>
+</head>
+
+<body>
+
+<div id="hud">
+ <div class="panel">🏆 SCORE: <span id="score">0</span></div>
+ <div class="panel">🪙 COINS: <span id="coins">0</span></div>
+ <div class="panel">⭐ BEST: <span id="best">0</span></div>
+</div>
+
+<button id="pause" onclick="pauseGame()">Ⅱ</button>
+
+<div id="controls">
+ <button onclick="move(-1)">⬅</button>
+ <button onclick="move(1)">➡</button>
+ <button onclick="jump()">⬆</button>
+ <button onclick="slide()">⬇</button>
+</div>
+
+<div id="message">
+ <div id="box">
+  <h1>🌴 JUNGLE TREASURE RUNNER</h1>
+  <p>Explore the ancient jungle!</p>
+  <p>Collect coins and avoid obstacles.</p>
+  <p>⬅ ➡ Move | ⬆ Jump | ⬇ Slide</p>
+  <button onclick="startGame()">START GAME</button>
+ </div>
+</div>
+
+<script type="importmap">
+{
+ "imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+ }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+
+// =====================================
+// 1. BASIC THREE.JS SETUP
+// =====================================
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x78cce9);
+scene.fog=new THREE.Fog(0x78cce9,35,125);
+
+const camera=new THREE.PerspectiveCamera(
+ 65,innerWidth/innerHeight,.1,180
+);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.7));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+// LIGHTS
+scene.add(new THREE.HemisphereLight(0xe3f7ff,0x52683a,2));
+
+const sunlight=new THREE.DirectionalLight(0xffffff,3);
+sunlight.position.set(-10,20,12);
+sunlight.castShadow=true;
+sunlight.shadow.mapSize.set(1024,1024);
+scene.add(sunlight);
+
+// =====================================
+// 2. MATERIALS
+// =====================================
+
+function material(color,roughness=.8,metalness=0){
+ return new THREE.MeshStandardMaterial({
+  color,roughness,metalness
+ });
+}
+
+const skin=material(0xc98a60);
+const skinLight=material(0xe4ad7c);
+const hair=material(0x392317);
+const jacket=material(0xa93422);
+const jacketDark=material(0x68251d);
+const pants=material(0x38583b);
+const pantsDark=material(0x263b2b);
+const shoes=material(0x4b3020);
+const shoeSole=material(0xd1a85b);
+const backpack=material(0x315a31);
+const gold=material(0xf7bd23,.25,.65);
+const scarfMaterial=material(0xef3024);
+const dark=material(0x201b17);
+
+// =====================================
+// 3. OBJECT HELPERS
+// =====================================
+
+function box(parent,w,h,d,mat,x,y,z){
+ const mesh=new THREE.Mesh(
+  new THREE.BoxGeometry(w,h,d),mat
+ );
+ mesh.position.set(x,y,z);
+ mesh.castShadow=true;
+ mesh.receiveShadow=true;
+ parent.add(mesh);
+ return mesh;
+}
+
+function sphere(parent,r,mat,x,y,z,sx=1,sy=1,sz=1){
+ const mesh=new THREE.Mesh(
+  new THREE.SphereGeometry(r,20,16),mat
+ );
+ mesh.position.set(x,y,z);
+ mesh.scale.set(sx,sy,sz);
+ mesh.castShadow=true;
+ parent.add(mesh);
+ return mesh;
+}
+
+function capsule(parent,r,length,mat,x,y,z){
+ const mesh=new THREE.Mesh(
+  new THREE.CapsuleGeometry(r,length,5,10),mat
+ );
+ mesh.position.set(x,y,z);
+ mesh.castShadow=true;
+ parent.add(mesh);
+ return mesh;
+}
+
+// =====================================
+// 4. GROUND AND RAILWAY
+// =====================================
+
+const groundMat=material(0x397b37);
+const wood=material(0x79502e);
+const railMat=material(0xabb5b5,.35,.75);
+
+box(scene,200,.5,190,groundMat,0,-.4,-70);
+box(scene,7,.16,190,material(0x66523e),0,-.04,-70);
+
+for(const x of [-2.25,2.25]){
+ box(scene,.16,.15,190,railMat,x,.08,-70);
+}
+
+const sleepers=[];
+
+for(let i=0;i<65;i++){
+ sleepers.push(
+  box(scene,7,.15,.34,wood,0,.02,-i*3)
+ );
+}
+
+// =====================================
+// 5. JUNGLE TREES
+// =====================================
+
+const trees=[];
+const leafMaterials=[
+ material(0x17642e),
+ material(0x237d36),
+ material(0x328d43)
+];
+
+function makeTree(x,z){
+ const group=new THREE.Group();
+
+ const trunk=capsule(group,.22,2.2,wood,0,1.3,0);
+ trunk.scale.y=1.2;
+
+ for(let i=0;i<5;i++){
+  const crown=sphere(
+   group,1,leafMaterials[i%3],
+   (Math.random()-.5)*.7,
+   2.6+i*.3,
+   (Math.random()-.5)*.7,
+   1.1,1,1.1
+  );
+ }
+
+ group.position.set(x,0,z);
+ scene.add(group);
+ trees.push(group);
+}
+
+for(let i=0;i<40;i++){
+ makeTree(-7-Math.random()*7,-i*5-5);
+ makeTree(7+Math.random()*7,-i*5-5);
+}
+
+// =====================================
+// 6. ANCIENT TEMPLE
+// =====================================
+
+const temple=new THREE.Group();
+const stone=material(0xb59b68);
+const templeDark=material(0x513a25);
+
+box(temple,6,5,4,stone,0,2.5,0);
+box(temple,7,.7,5,wood,0,5.2,0);
+box(temple,1.5,2.5,.2,templeDark,0,1.25,2.1);
+
+const roof=new THREE.Mesh(
+ new THREE.ConeGeometry(4.3,3.2,4),
+ wood
+);
+roof.position.y=7;
+roof.rotation.y=Math.PI/4;
+temple.add(roof);
+
+temple.position.set(0,0,-90);
+scene.add(temple);
+
+// Waterfall
+const waterfallMaterial=new THREE.MeshStandardMaterial({
+ color:0x38c7f0,
+ transparent:true,
+ opacity:.75,
+ roughness:.15
+});
+
+const waterfall=new THREE.Mesh(
+ new THREE.PlaneGeometry(6,17),
+ waterfallMaterial
+);
+waterfall.position.set(13,7,-65);
+scene.add(waterfall);
+
+box(scene,8,2,5,stone,13,10,-65);
+
+// =====================================
+// 7. DETAILED 3D RUNNING CHARACTER
+// =====================================
+
+const player=new THREE.Group();
+scene.add(player);
+
+// BODY
+const body=new THREE.Group();
+player.add(body);
+
+capsule(body,.34,.58,jacket,0,1.45,0);
+
+// Jacket details
+box(body,.55,.18,.37,jacketDark,0,1.2,0);
+box(body,.18,.52,.37,material(0x9c3023),0,1.47,.03);
+
+// Shirt collar
+box(body,.35,.12,.38,material(0xd4a35f),0,1.79,-.01);
+
+// NECK
+capsule(body,.13,.15,skin,0,1.92,0);
+
+// HEAD
+const head=new THREE.Group();
+head.position.set(0,2.23,0);
+body.add(head);
+
+sphere(head,.34,skin,0,0,0,1,.98,.92);
+
+// EARS
+sphere(head,.09,skin,-.33,-.02,0);
+sphere(head,.09,skin,.33,-.02,0);
+
+// HAIR
+sphere(head,.35,hair,0,.15,0,1.05,.55,1);
+sphere(head,.24,hair,-.19,.13,-.02,.8,.8,1);
+
+// Front hair fringe
+sphere(head,.18,hair,0,.25,-.23,1.2,.5,.6);
+
+// EYES - facing the camera direction (-Z)
+sphere(head,.045,material(0xffffff),-.12,.02,-.296);
+sphere(head,.045,material(0xffffff),.12,.02,-.296);
+sphere(head,.023,dark,-.12,.02,-.335);
+sphere(head,.023,dark,.12,.02,-.335);
+
+// Eyebrows
+box(head,.13,.035,.035,hair,-.12,.105,-.32);
+box(head,.13,.035,.035,hair,.12,.105,-.32);
+
+// BACKPACK
+const bag=new THREE.Group();
+body.add(bag);
+
+box(bag,.62,.76,.34,backpack,0,1.49,.35);
+box(bag,.49,.22,.38,material(0x416f37),0,1.18,.4);
+box(bag,.43,.3,.1,material(0x76502b),0,1.47,.55);
+box(bag,.13,.13,.05,gold,0,1.47,.62);
+
+// Backpack side pockets
+box(bag,.16,.35,.28,material(0x274a2b),-.34,1.43,.34);
+box(bag,.16,.35,.28,material(0x274a2b),.34,1.43,.34);
+
+// Backpack straps
+box(bag,.1,.68,.07,material(0xb98b48),-.26,1.5,.12);
+box(bag,.1,.68,.07,material(0xb98b48),.26,1.5,.12);
+
+// SCARF
+const scarf=new THREE.Group();
+body.add(scarf);
+
+box(scarf,.72,.13,.15,scarfMaterial,0,1.89,-.05);
+const scarfTail=box(
+ scarf,.65,.11,.12,scarfMaterial,.4,1.9,.02
+);
+scarfTail.rotation.z=-.3;
+
+// =====================================
+// 8. ANIMATED ARMS AND LEGS
+// =====================================
+
+function createLimb(parent,x,y,length,r,mat){
+ const pivot=new THREE.Group();
+ pivot.position.set(x,y,0);
+ parent.add(pivot);
+
+ capsule(pivot,r,length-.08,mat,0,-length/2,0);
+
+ return pivot;
+}
+
+const leftArm=createLimb(body,-.42,1.68,.72,.12,skinLight);
+const rightArm=createLimb(body,.42,1.68,.72,.12,skinLight);
+
+const leftGlove=sphere(leftArm,.14,material(0x533323),0,-.7,0);
+const rightGlove=sphere(rightArm,.14,material(0x533323),0,-.7,0);
+
+function createLeg(x){
+ const pivot=new THREE.Group();
+ pivot.position.set(x,1.03,0);
+ body.add(pivot);
+
+ capsule(pivot,.17,.65,pants,0,-.36,0);
+
+ const knee=sphere(pivot,.17,pantsDark,0,-.65,0);
+ capsule(pivot,.15,.35,pantsDark,0,-.76,0);
+
+ const foot=new THREE.Group();
+ foot.position.set(0,-.97,-.05);
+ pivot.add(foot);
+
+ box(foot,.34,.2,.53,shoes,0,0,-.08);
+ box(foot,.35,.055,.54,shoeSole,0,-.11,-.08);
+ box(foot,.28,.07,.22,material(0x99704a),0,.1,-.2);
+
+ return {pivot,foot};
+}
+
+const leftLeg=createLeg(-.2);
+const rightLeg=createLeg(.2);
+
+// =====================================
+// 9. LITTLE RUNNING COMPANION
+// =====================================
+
+const pet=new THREE.Group();
+player.add(pet);
+pet.position.set(.85,0,.05);
+
+sphere(pet,.27,material(0xe8d3a6),0,1.12,0,1,1.1,.9);
+sphere(pet,.22,material(0xb17b50),0,1.45,0);
+
+sphere(pet,.065,dark,-.1,1.47,-.19);
+sphere(pet,.065,dark,.1,1.47,-.19);
+
+sphere(pet,.12,material(0x6d422c),-.2,1.62,.02);
+sphere(pet,.12,material(0x6d422c),.2,1.62,.02);
+
+// =====================================
+// 10. COINS AND OBSTACLES
+// =====================================
+
+const obstacles=[];
+const coins=[];
+
+function createCoin(lane,z){
+ const group=new THREE.Group();
+
+ const ring=new THREE.Mesh(
+  new THREE.TorusGeometry(.38,.12,12,24),gold
+ );
+ group.add(ring);
+
+ const center=new THREE.Mesh(
+  new THREE.CylinderGeometry(.22,.22,.1,24),
+  material(0xffd94b,.3,.6)
+ );
+ center.rotation.x=Math.PI/2;
+ group.add(center);
+
+ group.position.set((lane-1)*2.25,1.3,z);
+ scene.add(group);
+ coins.push(group);
+}
+
+function createObstacle(type,lane,z){
+ const group=new THREE.Group();
+ const x=(lane-1)*2.25;
+
+ if(type==="cart"){
+  box(group,1.5,.95,2,material(0x8c512c),0,.8,0);
+  box(group,1.3,.16,1.8,material(0x34748c),0,1.32,0);
+  for(const a of [-.6,.6]){
+   for(const b of [-.65,.65]){
+    const wheel=new THREE.Mesh(
+     new THREE.CylinderGeometry(.22,.22,.18,16),
+     dark
+    );
+    wheel.position.set(a,.25,b);
+    wheel.rotation.z=Math.PI/2;
+    group.add(wheel);
+   }
+  }
+ }
+ else if(type==="barrier"){
+  box(group,1.8,.65,.3,material(0xd82c20),0,1.1,0);
+  box(group,.18,1.5,.3,wood,-.75,.75,0);
+  box(group,.18,1.5,.3,wood,.75,.75,0);
+  box(group,.7,.12,.34,material(0xffffff),0,1.1,-.18);
+ }
+ else if(type==="log"){
+  const log=new THREE.Mesh(
+   new THREE.CylinderGeometry(.35,.35,2.1,18),
+   wood
+  );
+  log.rotation.z=Math.PI/2;
+  log.position.y=.55;
+  group.add(log);
+ }
+ else{
+  box(group,1.9,.15,1.5,wood,0,.1,0);
+  box(group,.2,1.2,.2,wood,-.8,.7,0);
+  box(group,.2,1.2,.2,wood,.8,.7,0);
+ }
+
+ group.position.set(x,0,z);
+ scene.add(group);
+
+ obstacles.push({
+  group,type,lane,active:true
+ });
+}
+
+// =====================================
+// 11. GAME CONTROLS
+// =====================================
+
+let targetLane=1;
+let jumping=false;
+let sliding=false;
+let jumpVelocity=0;
+let slideTimer=0;
+
+let running=false;
+let paused=false;
+let score=0;
+let coinCount=0;
+let best=0;
+let speed=20;
+let spawnTimer=0;
+
+try{
+ best=Number(localStorage.getItem("jungleRealBest"))||0;
+}catch(e){}
+
+function move(direction){
+ if(!running||paused)return;
+ targetLane=Math.max(0,Math.min(2,targetLane+direction));
+}
+
+function jump(){
+ if(!running||paused||jumping||sliding)return;
+ jumping=true;
+ jumpVelocity=9;
+}
+
+function slide(){
+ if(!running||paused||jumping)return;
+ sliding=true;
+ slideTimer=.8;
+ body.scale.y=.58;
+ body.position.y=-.5;
+}
+
+window.move=move;
+window.jump=jump;
+window.slide=slide;
+
+addEventListener("keydown",e=>{
+ if(e.key==="ArrowLeft"||e.key==="a")move(-1);
+ if(e.key==="ArrowRight"||e.key==="d")move(1);
+ if(e.key==="ArrowUp"||e.key===" "){
+  e.preventDefault();jump();
+ }
+ if(e.key==="ArrowDown")slide();
+});
+
+// =====================================
+// 12. GAME HUD
+// =====================================
+
+function updateHUD(){
+ document.getElementById("score").textContent=Math.floor(score);
+ document.getElementById("coins").textContent=coinCount;
+ document.getElementById("best").textContent=best;
+}
+
+// =====================================
+// 13. GAME START AND PAUSE
+// =====================================
+
+function startGame(){
+ for(const o of obstacles)scene.remove(o.group);
+ for(const c of coins)scene.remove(c);
+
+ obstacles.length=0;
+ coins.length=0;
+
+ score=0;
+ coinCount=0;
+ speed=20;
+ targetLane=1;
+ spawnTimer=0;
+
+ player.position.set(0,0,0);
+ body.scale.y=1;
+ body.position.y=0;
+
+ jumping=false;
+ sliding=false;
+ jumpVelocity=0;
+
+ running=true;
+ paused=false;
+
+ document.getElementById("pause").textContent="Ⅱ";
+ document.getElementById("message").style.display="none";
+ updateHUD();
+
+ clock.getDelta();
+}
+window.startGame=startGame;
+
+function pauseGame(){
+ if(!running)return;
+
+ paused=!paused;
+
+ document.getElementById("pause").textContent=paused?"▶":"Ⅱ";
+
+ if(paused){
+  document.getElementById("box").innerHTML=
+   "<h1>GAME PAUSED</h1><button onclick='resumeGame()'>RESUME</button>";
+  document.getElementById("message").style.display="flex";
+ }
+}
+window.pauseGame=pauseGame;
+
+function resumeGame(){
+ paused=false;
+ document.getElementById("message").style.display="none";
+ document.getElementById("pause").textContent="Ⅱ";
+ clock.getDelta();
+}
+window.resumeGame=resumeGame;
+
+function gameOver(){
+ running=false;
+ best=Math.max(best,Math.floor(score));
+
+ try{
+  localStorage.setItem("jungleRealBest",best);
+ }catch(e){}
+
+ updateHUD();
+
+ document.getElementById("box").innerHTML=
+ `<h1>🏆 GAME OVER</h1>
+ <h2>Score: ${Math.floor(score)}</h2>
+ <h2>Coins: ${coinCount}</h2>
+ <button onclick="startGame()">PLAY AGAIN</button>`;
+
+ document.getElementById("message").style.display="flex";
+}
+
+// =====================================
+// 14. CHARACTER ANIMATION
+// =====================================
+
+let animationTime=0;
+
+function animateCharacter(dt){
+ animationTime+=dt*10;
+
+ const swing=Math.sin(animationTime);
+
+ if(jumping){
+  leftLeg.pivot.rotation.x=.5;
+  rightLeg.pivot.rotation.x=-.5;
+  leftArm.rotation.x=-.7;
+  rightArm.rotation.x=.7;
+ }
+ else if(sliding){
+  leftLeg.pivot.rotation.x=1.1;
+  rightLeg.pivot.rotation.x=1.1;
+  leftArm.rotation.x=-.3;
+  rightArm.rotation.x=.3;
+ }
+ else{
+  leftLeg.pivot.rotation.x=swing*.85;
+  rightLeg.pivot.rotation.x=-swing*.85;
+
+  leftArm.rotation.x=-swing*.75;
+  rightArm.rotation.x=swing*.75;
+ }
+
+ scarfTail.rotation.z=-.3+Math.sin(animationTime)*.15;
+ pet.position.y=Math.sin(animationTime*1.8)*.07;
+ pet.rotation.z=Math.sin(animationTime)*.07;
+}
+
+// =====================================
+// 15. MAIN GAME UPDATE
+// =====================================
+
+function update(dt){
+ if(!running||paused)return;
+
+ score+=dt*12;
+ speed=Math.min(38,20+score*.007);
+
+ spawnTimer+=dt;
+
+ if(spawnTimer>1.7){
+  const lane=Math.floor(Math.random()*3);
+  const types=["cart","barrier","log","bridge"];
+
+  createObstacle(
+   types[Math.floor(Math.random()*types.length)],
+   lane,-75
+  );
+
+  if(Math.random()<.9){
+   createCoin(Math.floor(Math.random()*3),-75);
+  }
+
+  spawnTimer=0;
+ }
+
+ // PLAYER LANE MOVEMENT
+ const targetX=(targetLane-1)*2.25;
+ player.position.x+=
+  (targetX-player.position.x)*Math.min(1,dt*12);
+
+ // JUMP
+ if(jumping){
+  player.position.y+=jumpVelocity*dt;
+  jumpVelocity-=23*dt;
+
+  if(player.position.y<=0){
+   player.position.y=0;
+   jumping=false;
+  }
+ }
+
+ // SLIDE
+ if(sliding){
+  slideTimer-=dt;
+
+  if(slideTimer<=0){
+   sliding=false;
+   body.scale.y=1;
+   body.position.y=0;
+  }
+ }
+
+ animateCharacter(dt);
+
+ // RAILWAY MOVEMENT
+ for(const s of sleepers){
+  s.position.z+=speed*dt;
+  if(s.position.z>8)s.position.z-=195;
+ }
+
+ // TREES
+ for(const t of trees){
+  t.position.z+=speed*dt;
+  if(t.position.z>12)t.position.z-=200;
+ }
+
+ // OBSTACLES
+ for(const o of obstacles){
+  if(!o.active)continue;
+
+  o.group.position.z+=speed*dt;
+
+  if(
+   o.group.position.z>1.7&&
+   o.group.position.z<3.2&&
+   o.lane===targetLane
+  ){
+   let safe=false;
+
+   if(o.type==="barrier"||o.type==="log")safe=jumping;
+   if(o.type==="bridge")safe=sliding;
+   if(o.type==="cart")safe=jumping||sliding;
+
+   if(!safe){
+    gameOver();
+    return;
+   }
+
+   o.active=false;
+   scene.remove(o.group);
+  }
+
+  if(o.group.position.z>8){
+   o.active=false;
+   scene.remove(o.group);
+  }
+ }
+
+ // COINS
+ for(let i=coins.length-1;i>=0;i--){
+  const c=coins[i];
+
+  c.position.z+=speed*dt;
+  c.rotation.y+=dt*3;
+
+  if(
+   c.position.z>1.7&&
+   c.position.z<3.2&&
+   Math.abs(c.position.x-player.position.x)<.9
+  ){
+   coinCount++;
+   score+=30;
+   scene.remove(c);
+   coins.splice(i,1);
+  }
+  else if(c.position.z>8){
+   scene.remove(c);
+   coins.splice(i,1);
+  }
+ }
+
+ updateHUD();
+}
+
+// =====================================
+// 16. CAMERA
+// =====================================
+
+function updateCamera(){
+ camera.position.x+=(player.position.x*.3-camera.position.x)*.08;
+ camera.position.y=4.6;
+ camera.position.z=9;
+
+ camera.lookAt(
+  player.position.x*.25,
+  1.35+player.position.y*.3,
+  -9
+ );
+}
+
+// =====================================
+// 17. RENDER LOOP
+// =====================================
+
+const clock=new THREE.Clock();
+
+function animate(){
+ requestAnimationFrame(animate);
+
+ const dt=Math.min(clock.getDelta(),.035);
+
+ if(running&&!paused){
+  update(dt);
+  updateCamera();
+ }
+
+ renderer.render(scene,camera);
+}
+
+animate();
+
+// RESIZE
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+
+</script>
+</body>
+</html>
